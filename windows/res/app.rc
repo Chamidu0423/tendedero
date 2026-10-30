@@ -1,0 +1,40 @@
+// Tendedero for Windows — application resources (icon + manifest)
+#include <windows.h>
+
+101 ICON "tendedero.ico"
+
+1 RT_MANIFEST "manifest.xml"
+
+// ---- Version information (release 1.0.0) ----
+#define VER_MAJOR 1
+#define VER_MINOR 0
+#define VER_PATCH 0
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    VER_MAJOR,VER_MINOR,VER_PATCH,0
+ PRODUCTVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+ FILEFLAGS      0x0
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"   // en-US, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Tendedero"
+            VALUE "FileDescription",  "Tendedero for Windows - screenshots hung out to dry"
+            VALUE "FileVersion",      "1.0.0"
+            VALUE "InternalName",     "Tendedero"
+            VALUE "LegalCopyright",   "MIT licensed code. Name and icon not included."
+            VALUE "OriginalFilename", "Tendedero.exe"
+            VALUE "ProductName",      "Tendedero"
+            VALUE "ProductVersion",   "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
