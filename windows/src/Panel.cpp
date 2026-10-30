@@ -20,6 +20,8 @@
 using namespace Gdiplus;
 
 void showPegContextMenu(int pegIndex);   // Menu.cpp (tray/context menus)
+void logf(const char* fmt, ...);         // main.cpp diagnostic log
+static inline std::string utf8(const std::wstring& w) { return utf16to8(w); }
 
 PanelState S;
 RECT g_captureArea = {};
@@ -107,7 +109,16 @@ void hangPath(const std::wstring& path, bool flyingFromCaptureArea, RECT capture
     peg.path = path;
     peg.addedMs = nowMs();
     double maxPix = layoutPhotoMaxHeight(g.scale) * 3;   // generous thumb, like macOS
-    if (!loadPegImage(peg, path, maxPix)) { freePeg(peg); return; }  // not an image / unreadable
+    if (!loadPegImage(peg, path, maxPix)) {
+        freePeg(peg);
+        std::string a = utf8(path);
+        logf("hang skipped (unreadable/not an image): %s", a.c_str());
+        return;
+    }  // not an image / unreadable
+    {
+        std::string a = utf8(path);
+        logf("hung on line: %s", a.c_str());
+    }
 
     // keep newest at the right; trim overflow when "as many as fit"
     S.pegs.push_back(peg);
@@ -440,6 +451,8 @@ void panelTick() {
         if (!S.revealed && !g.hideLine &&
             (double)(now - S.inBandSince) >= kRevealDelayS * 1000.0) {
             S.revealed = true;
+            logf("reveal: cursor band dwell hit (y=%ld, band top=%ld)",
+                 (long)pt.y, (long)(sr.top + kMenuBarBandPx));
         }
     } else {
         S.inBandSince = 0;

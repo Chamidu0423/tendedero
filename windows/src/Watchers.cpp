@@ -35,10 +35,27 @@ static bool isImageName(const std::wstring& name) {
     return false;
 }
 
+void logf(const char* fmt, ...);   // main.cpp crash/diagnostic log
+static inline std::string utf8(const std::wstring& w) { return utf16to8(w); }
+
 static void scanFolderOnce(const std::wstring& dir, bool firstScan) {
     // List images, hang anything unseen. On the very first scan we only record
     // what exists (like starting/listing/missed in ScreenshotWatcher) so old
     // files don't flood the line — except the Inbox, which is ours.
+    // v1.0.3: a folder that doesn't exist yet (e.g. Pictures\Screenshots on a
+    // fresh Win11 where nothing has been captured there) must not silently
+    // swallow everything — create it and keep watching.
+    DWORD attrs = GetFileAttributesW(dir.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
+        attrs = GetFileAttributesW(dir.c_str());
+    }
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        std::string a = utf8(dir);
+        logf("scan: folder missing, skipping: %s", a.c_str());
+        return;
+    }
+
     WIN32_FIND_DATAW fd;
     std::wstring pat = dir + L"\\*";
     HANDLE h = FindFirstFileW(pat.c_str(), &fd);
@@ -46,6 +63,11 @@ static void scanFolderOnce(const std::wstring& dir, bool firstScan) {
     std::vector<std::wstring> found;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        // v1.0.3: skip hidden/system/temp artifacts so transient files from
+        // other apps (or our own half-written saves) never reach the line.
+        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM |
+                                   FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_OFFLINE))
+            continue;
         if (!isImageName(fd.cFileName)) continue;
         found.push_back(dir + L"\\" + fd.cFileName);
     } while (FindNextFileW(h, &fd));
@@ -53,11 +75,46 @@ static void scanFolderOnce(const std::wstring& dir, bool firstScan) {
 
     bool inbox = _wcsnicmp(dir.c_str(), tendederoInboxDir().c_str(),
                            wcslen(tendederoInboxDir().c_str())) == 0;
+    int hung = 0;
     for (auto& p : found) {
         bool isNew = g_seen.insert(p).second;
         if (!isNew) continue;
         if (firstScan && !inbox) continue;               // baseline only
+        // v1.0.3: debounce — wait until the file is fully written and its
+        // size settles before hanging (fixes hangs when PrtScn auto-save or
+        // Explorer copy lands a big PNG mid-write).
+        BY_HANDLE_FILE_INFORMATION fi{};
+        for (int attempt = 0; attempt < 40; attempt++) { // up to ~2 s
+            HANDLE f = CreateFileW(p.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f == INVALID_HANDLE_VALUE) { Sleep(50); continue; }
+            BOOL ok = GetFileInformationByHandle(f, &fi);
+            ULARGE_INTEGER sz1; sz1.HighPart = fi.nFileSizeHigh; sz1.LowPart = fi.nFileSizeLow;
+            CloseHandle(f);
+            if (!ok) break;
+            Sleep(60);
+            f = CreateFileW(p.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                BY_HANDLE_FILE_INFORMATION fi2{};
+                BOOL ok2 = GetFileInformationByHandle(f, &fi2);
+                ULARGE_INTEGER sz2; sz2.HighPart = fi2.nFileSizeHigh; sz2.LowPart = fi2.nFileSizeLow;
+                CloseHandle(f);
+                if (ok2 && sz2.QuadPart == sz1.QuadPart && sz2.QuadPart > 0) break;
+            }
+            Sleep(50);
+        }
+        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) { g_seen.erase(p); continue; }
+        std::string a = utf8(p);
+        logf("capture detected: %s", a.c_str());
         hangPath(p, /*flying=*/false, {});
+        hung++;
+    }
+    if (hung) {
+        std::string d = utf8(dir);
+        logf("scan hung %d new capture(s) from %s", hung, d.c_str());
     }
 }
 
