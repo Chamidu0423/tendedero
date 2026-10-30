@@ -425,8 +425,13 @@ static void paintLayered(HWND hwnd) {
 // (easeIn), unless pinned/busy/hideLine.
 void panelTick() {
     POINT pt; GetCursorPos(&pt);
-    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-    bool inBand = pt.y <= wa.top + kMenuBarBandPx;
+    // Band = top of the *screen* (not work area): on Windows the taskbar is
+    // usually at the bottom, so the trigger lives under the hidden auto-
+    // reveal zone at the very top edge — same feel as macOS's menu bar band.
+    RECT sr = {0}; MONITORINFO mi = { sizeof(mi) };
+    if (GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY), &mi)) sr = mi.rcMonitor;
+    else { sr.left = 0; sr.top = 0; sr.right = GetSystemMetrics(SM_CXSCREEN); sr.bottom = GetSystemMetrics(SM_CYSCREEN); }
+    bool inBand = pt.y <= sr.top + kMenuBarBandPx;
     long long now = nowMs();
 
     if (inBand) {
@@ -683,15 +688,21 @@ void panelCreate(HINSTANCE hi) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
 
-    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-    int W = wa.right - wa.left;
+    // Full monitor rect: when the taskbar is at the bottom (default), the
+    // work area starts at y=0 anyway, but with a top taskbar we must still
+    // be able to park the panel above y=0 and reveal over the screen edge.
+    RECT sr = {0}; MONITORINFO mi = { sizeof(mi) };
+    POINT origin = {0, 0};
+    if (GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi)) sr = mi.rcMonitor;
+    else { sr.right = GetSystemMetrics(SM_CXSCREEN); sr.bottom = GetSystemMetrics(SM_CYSCREEN); }
+    int W = sr.right - sr.left;
     int H = (int)layoutPanelHeight(g.scale) + 24;
     g_panelW = W; g_panelH = H;
 
     g_hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"TendederoLinePanel", L"Tendedero",
-        WS_POPUP, wa.left, wa.top - H /*hidden above*/, W, H,
+        WS_POPUP, sr.left, sr.top - H /*hidden above*/, W, H,
         nullptr, nullptr, hi, nullptr);
 
     SetLayeredWindowAttributes(g_hwnd, 0, 255, LWA_ALPHA); // initial; ULW paints replace
