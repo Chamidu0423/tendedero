@@ -6,6 +6,30 @@
 #include "Watchers.h"
 #include "CaptureFlight.h"
 #include <shellapi.h>
+#include <dbt.h>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
+
+// --- crash diagnostics: if startup throws/dies, write %TEMP%\Tendedero.log
+// so the user can tell us what happened instead of "nothing happens".
+static FILE* g_log = nullptr;
+void logf(const char* fmt, ...) {
+    if (!g_log) {
+        char path[MAX_PATH]; GetTempPathA(MAX_PATH, path);
+        strcat_s(path, "Tendedero.log");
+        fopen_s(&g_log, path, "a");
+        if (g_log) { time_t t = time(nullptr); fprintf(g_log, "\n=== run %s", ctime(&t)); fflush(g_log); }
+    }
+    if (!g_log) return;
+    va_list ap; va_start(ap, fmt); vfprintf(g_log, fmt, ap); va_end(ap);
+    fputc('\n', g_log); fflush(g_log);
+}
+static LONG WINAPI excFilter(EXCEPTION_POINTERS* e) {
+    logf("UNHANDLED EXCEPTION code=0x%08lX addr=%p", e->ExceptionRecord->ExceptionCode, e->ExceptionRecord->ExceptionAddress);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+struct ExcGuard { ExcGuard() { SetUnhandledExceptionFilter(excFilter); } };
 
 void trayCreate(HINSTANCE hi, HWND messageWnd);
 void trayDestroy();
@@ -105,19 +129,34 @@ static LRESULT CALLBACK msgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// Show the line briefly as a first-run hint (macOS reveals on hover of the
+// menu bar; Windows has no equivalent band — so we pin+reveal for 3 s once).
+static void firstRunHint() {
+    DWORD done = regDword(HKEY_CURRENT_USER, kAppRegKey, L"FirstRunHint", 0);
+    if (done) return;
+    setRegDword(HKEY_CURRENT_USER, kAppRegKey, L"FirstRunHint", 1);
+    S.revealed = true; S.pinned = true; panelRefresh();
+    SetTimer(g_msg, 99, 3500, nullptr);   // WM_TIMER 99 → unpin in msgProc
+}
+
 int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int) {
+    ExcGuard excGuard;
+    logf("startup: pid=%lu", GetCurrentProcessId());
     // Single instance (macOS relies on LaunchServices; Windows needs a mutex).
     g_mutex = CreateMutexW(nullptr, TRUE, L"Local\\TendederoSingleInstance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) { logf("already running, exiting"); return 0; }
 
-    SetProcessDPIAware();                  // per-session DPI awareness v1
+    // Win8.1+: per-monitor v2 DPI via manifest; this is the fallback path.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
     g.load();
     initLocalization();
+    logf("lang loaded, watchers folders ready");
     maybeAskInboxTakeover();
 
     panelCreate(hi);
+    logf("panel created hwnd=%p", (void*)panelHwnd());
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc = msgProc; wc.hInstance = hi; wc.lpszClassName = L"TendederoMessage";
@@ -131,12 +170,18 @@ int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int) {
     applyHotkey();
     watchersStart();
     trayCreate(hi, g_msg);
+    firstRunHint();
+    logf("tray added, entering message loop");
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0)) {
+        if (m.message == WM_TIMER && m.hwnd == g_msg && m.wParam == 99) { // end hint
+            KillTimer(g_msg, 99); S.pinned = false; panelRefresh(); continue;
+        }
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
+    logf("message loop exited");
 
     if (g_hotkeyId) UnregisterHotKey(g_msg, 1);
     RemoveClipboardFormatListener(g_msg);

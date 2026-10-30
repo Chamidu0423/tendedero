@@ -147,10 +147,10 @@ void trayOnClick(WPARAM wp, LPARAM lp) {
         if (!cmd) return;
         switch (cmd) {
         case IDM_TOGGLE_LINE:
-            g.hideLine = !g.hideLine;
-            if (!g.hideLine) { S.revealed = false; }     // wait for next hover
-            else { S.revealed = false; }
-            g.save(); break;
+            // "Bring the line down": show it now without waiting for a hover.
+            if (S.revealed) { g.hideLine = true; S.revealed = false; }
+            else { g.hideLine = false; S.revealed = true; S.inBandSince = 0; }
+            g.save(); panelRefresh(); break;
         case IDM_TAKE_ALL_DOWN: panelClearAll(); break;
         case IDM_HANDLE_SHOTS:
             g.handleScreenshots = !g.handleScreenshots; g.save();
@@ -187,7 +187,7 @@ void trayOnClick(WPARAM wp, LPARAM lp) {
         }
         case IDM_CHECK_UPDATES:
             // Same GitHub repo as the macOS updater; open the releases page.
-            ShellExecuteW(nullptr, L"open", L"https://github.com/alperoeke/tendedero/releases",
+            ShellExecuteW(nullptr, L"open", L"https://github.com/Chamidu0423/tendedero/releases",
                           nullptr, nullptr, SW_SHOWNORMAL);
             break;
         case IDM_QUIT: PostQuitMessage(0); break;
